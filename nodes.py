@@ -29,7 +29,7 @@ class PreViewSRT:
         srt_name = os.path.basename(srt)
         dir_name = os.path.dirname(srt)
         dir_name = os.path.basename(dir_name)
-        with open(srt, 'r') as f:
+        with open(srt, 'r', encoding="utf-8") as f:
             srt_content = f.read()
         return {"ui": {"srt":[srt_content,srt_name,dir_name]}}
 
@@ -179,3 +179,19 @@ class LoadAudioPath:
     def load_audio(self, audio):
         audio_path = folder_paths.get_annotated_filepath(audio)
         return (audio_path,)
+
+class PathToAudioPath:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "path": ("STRING", {"default": "X:\\path\\to\\your\\audio_or_video.mp4"}),
+            }
+        }
+
+    CATEGORY = "AIFSH_WhisperX"
+    RETURN_TYPES = ("AUDIOPATH",)
+    FUNCTION = "convert_path"
+
+    def convert_path(self, path):
+        return (path,)
