@@ -74,9 +74,9 @@ class WhisperX:
                     {"audio": ("AUDIOPATH",),
                      "model_type":(model_list,{"default": "large-v3"}),
                      "batch_size":("INT",{"default": 4}),
-                     "chunk_size": ("INT", {"default": 30, "min": 1}),
+                     "chunk_size": ("INT", {"default": 0, "min": 0}),
                      "output_format": (format_list, {"default": "srt"}),
-                     "max_line_width": ("INT", {"default": 42, "min": -1}),
+                     "max_line_width": ("INT", {"default": 0, "min": 0}),
                      "if_mutiple_speaker":("BOOLEAN",{"default": False}),
                      "use_auth_token":("STRING",{"default": "put your huggingface user auth token here for Assign speaker labels"}),
                      "if_translate":("BOOLEAN",{"default": False}),
@@ -132,7 +132,11 @@ class WhisperX:
             model_type = "deepdml/faster-whisper-large-v3-turbo-ct2"
         model = whisperx.load_model(model_type, device, compute_type=compute_type)
         audio_data = whisperx.load_audio(audio_path)
-        result = model.transcribe(audio_data, batch_size=batch_size, chunk_size=chunk_size)
+        
+        transcribe_args = {"batch_size": batch_size}
+        if chunk_size > 0:
+            transcribe_args["chunk_size"] = chunk_size
+        result = model.transcribe(audio_data, **transcribe_args)
         language_code = result["language"]
         
         # 2. Align
