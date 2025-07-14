@@ -77,6 +77,7 @@ class WhisperX:
                      "chunk_size": ("INT", {"default": 0, "min": 0}),
                      "output_format": (format_list, {"default": "srt"}),
                      "max_line_width": ("INT", {"default": 0, "min": 0}),
+                     "initial_prompt": ("STRING", {"default": "", "multiline": True}),
                      "if_mutiple_speaker":("BOOLEAN",{"default": False}),
                      "use_auth_token":("STRING",{"default": "put your huggingface user auth token here for Assign speaker labels"}),
                      "if_translate":("BOOLEAN",{"default": False}),
@@ -118,7 +119,7 @@ class WhisperX:
             return srt.compose(subs)
         return ""
 
-    def get_transcript(self, audio, model_type, batch_size, chunk_size, output_format, max_line_width, if_mutiple_speaker,
+    def get_transcript(self, audio, model_type, batch_size, chunk_size, output_format, max_line_width, initial_prompt, if_mutiple_speaker,
                 use_auth_token, if_translate, translator, to_language):
         
         compute_type = "float16"
@@ -130,12 +131,18 @@ class WhisperX:
         # 1. Transcribe
         if model_type == "large-v3-turbo":
             model_type = "deepdml/faster-whisper-large-v3-turbo-ct2"
-        model = whisperx.load_model(model_type, device, compute_type=compute_type)
+        
+        asr_options = {}
+        if initial_prompt:
+            asr_options["initial_prompt"] = initial_prompt
+            
+        model = whisperx.load_model(model_type, device, compute_type=compute_type, asr_options=asr_options)
         audio_data = whisperx.load_audio(audio_path)
         
         transcribe_args = {"batch_size": batch_size}
         if chunk_size > 0:
             transcribe_args["chunk_size"] = chunk_size
+
         result = model.transcribe(audio_data, **transcribe_args)
         language_code = result["language"]
         
