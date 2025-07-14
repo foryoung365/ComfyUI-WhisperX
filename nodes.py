@@ -8,6 +8,8 @@ import cuda_malloc
 import translators as ts
 from tqdm import tqdm
 from datetime import timedelta
+import textwrap
+
 input_path = folder_paths.get_input_directory()
 out_path = folder_paths.get_output_directory()
 
@@ -15,7 +17,7 @@ class PreViewSRT:
     @classmethod
     def INPUT_TYPES(s):
         return {"required":
-                    {"srt": ("SRT",)},
+                    {"srt": ("SRT",)}
                 }
 
     CATEGORY = "AIFSH_WhisperX"
@@ -38,7 +40,7 @@ class SRTToString:
     @classmethod
     def INPUT_TYPES(s):
         return {"required":
-                    {"srt": ("SRT",)},
+                    {"srt": ("SRT",)}
                 }
     RETURN_TYPES = ("STRING",)
     FUNCTION = "read"
@@ -67,108 +69,115 @@ class WhisperX:
         'translateCom', 'translateMe', 'utibet', 'volcEngine', 'yandex',
         'yeekit', 'youdao']
         lang_list = ["zh","en","ja","ko","ru","fr","de","es","pt","it","ar"]
+        format_list = ["srt", "txt"]
         return {"required":
                     {"audio": ("AUDIOPATH",),
-                     "model_type":(model_list,{
-                         "default": "large-v3"
-                     }),
-                     "batch_size":("INT",{
-                         "default": 4
-                     }),
-                     "if_mutiple_speaker":("BOOLEAN",{
-                         "default": False
-                     }),
-                     "use_auth_token":("STRING",{
-                         "default": "put your huggingface user auth token here for Assign speaker labels"
-                     }),
-                     "if_translate":("BOOLEAN",{
-                         "default": False
-                     }),
-                     "translator":(translator_list,{
-                         "default": "alibaba"
-                     }),
-                     "to_language":(lang_list,{
-                         "default": "en"
-                     })
-                     },
+                     "model_type":(model_list,{"default": "large-v3"}),
+                     "batch_size":("INT",{"default": 4}),
+                     "chunk_size": ("INT", {"default": 30, "min": 1}),
+                     "output_format": (format_list, {"default": "srt"}),
+                     "max_line_width": ("INT", {"default": 42, "min": -1}),
+                     "if_mutiple_speaker":("BOOLEAN",{"default": False}),
+                     "use_auth_token":("STRING",{"default": "put your huggingface user auth token here for Assign speaker labels"}),
+                     "if_translate":("BOOLEAN",{"default": False}),
+                     "translator":(translator_list,{"default": "alibaba"}),
+                     "to_language":(lang_list,{"default": "en"})
+                     }
                 }
 
     CATEGORY = "AIFSH_WhisperX"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("original_output_path", "translated_output_path")
+    FUNCTION = "get_transcript"
 
-    RETURN_TYPES = ("SRT","SRT")
-    RETURN_NAMES = ("ori_SRT","trans_SRT")
-    FUNCTION = "get_srt"
+    def _generate_output(self, result, output_format, max_line_width):
+        if output_format == 'txt':
+            lines = []
+            for segment in result["segments"]:
+                text = segment['text'].strip()
+                if 'speaker' in segment:
+                    lines.append(f"[{segment['speaker']}]: {text}")
+                else:
+                    lines.append(text)
+            return "\n".join(lines)
+        
+        elif output_format == 'srt':
+            subs = []
+            for i, segment in enumerate(result["segments"]):
+                start_time = timedelta(seconds=segment['start'])
+                end_time = timedelta(seconds=segment['end'])
+                
+                text = segment['text'].strip()
+                if 'speaker' in segment:
+                    text = f"[{segment['speaker']}]: {text}"
 
-    def get_srt(self, audio,model_type,batch_size,if_mutiple_speaker,
-                use_auth_token,if_translate,translator,to_language):
+                if max_line_width > 0:
+                    text = '\n'.join(textwrap.wrap(text, width=max_line_width, break_long_words=False, replace_whitespace=False))
+
+                subs.append(srt.Subtitle(index=i+1, start=start_time, end=end_time, content=text))
+            return srt.compose(subs)
+        return ""
+
+    def get_transcript(self, audio, model_type, batch_size, chunk_size, output_format, max_line_width, if_mutiple_speaker,
+                use_auth_token, if_translate, translator, to_language):
+        
         compute_type = "float16"
-
-        base_name = os.path.basename(audio)[:-4]
         device = "cuda" if cuda_malloc.cuda_malloc_supported() else "cpu"
-        # 1. Transcribe with original whisper (batched)
+        
+        audio_path = audio
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+
+        # 1. Transcribe
         if model_type == "large-v3-turbo":
             model_type = "deepdml/faster-whisper-large-v3-turbo-ct2"
         model = whisperx.load_model(model_type, device, compute_type=compute_type)
-        audio = whisperx.load_audio(audio)
-        result = model.transcribe(audio, batch_size=batch_size)
-        # print(result["segments"]) # before alignment
-        language_code=result["language"]
-        # 2. Align whisper output
+        audio_data = whisperx.load_audio(audio_path)
+        result = model.transcribe(audio_data, batch_size=batch_size, chunk_size=chunk_size)
+        language_code = result["language"]
+        
+        # 2. Align
         model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
-
-        # print(result["segments"]) # after alignment
+        result = whisperx.align(result["segments"], model_a, metadata, audio_data, device, return_char_alignments=False)
         
-        # delete model if low on GPU resources
-        import gc; gc.collect(); torch.cuda.empty_cache(); del model_a,model
+        # 3. Diarize
         if if_mutiple_speaker:
-            # 3. Assign speaker labels
             diarize_model = whisperx.DiarizationPipeline(use_auth_token=use_auth_token, device=device)
-
-            # add min/max number of speakers if known
-            diarize_segments = diarize_model(audio)
-            # diarize_model(audio, min_speakers=min_speakers, max_speakers=max_speakers)
-
+            diarize_segments = diarize_model(audio_data)
             result = whisperx.assign_word_speakers(diarize_segments, result)
-            import gc; gc.collect(); torch.cuda.empty_cache(); del diarize_model
-        # print(diarize_segments)
-        # print(result.segments) # segments are now assigned speaker IDs
-        
-        srt_path = os.path.join(out_path,f"{time.time()}_{base_name}.srt")
-        trans_srt_path = os.path.join(out_path,f"{time.time()}_{base_name}_{to_language}.srt")
-        srt_line = []
-        trans_srt_line = []
-        for i, res in enumerate(tqdm(result["segments"],desc="Transcribing ...", total=len(result["segments"]))):
-            start = timedelta(seconds=res['start'])
-            end = timedelta(seconds=res['end'])
-            try:
-                speaker_name = res["speaker"][-1]
-            except:
-                speaker_name = "0"
-            content = res['text']
-            srt_line.append(srt.Subtitle(index=i+1, start=start, end=end, content=speaker_name+content))
-            if if_translate:
-                #if i== 0:
-                   # _ = ts.preaccelerate_and_speedtest() 
-                content = ts.translate_text(query_text=content, translator=translator,to_language=to_language)
-                trans_srt_line.append(srt.Subtitle(index=i+1, start=start, end=end, content=speaker_name+content))
-                
-        with open(srt_path, 'w', encoding="utf-8") as f:
-            f.write(srt.compose(srt_line))
-        with open(trans_srt_path, 'w', encoding="utf-8") as f:
-            f.write(srt.compose(trans_srt_line))
 
+        # 4. Write original transcript
+        original_output_path = os.path.join(out_path, f"{time.time()}_{base_name}.{output_format}")
+        original_content = self._generate_output(result, output_format, max_line_width)
+        with open(original_output_path, 'w', encoding="utf-8") as f:
+            f.write(original_content)
+
+        # 5. Write translated transcript
+        translated_output_path = original_output_path
         if if_translate:
-            return (srt_path,trans_srt_path)
-        else:
-            return (srt_path,srt_path)
+            import copy
+            translated_result = copy.deepcopy(result)
+            for segment in tqdm(translated_result["segments"], desc="Translating ..."):
+                try:
+                    segment['text'] = ts.translate_text(query_text=segment['text'], translator=translator, to_language=to_language)
+                except Exception as e:
+                    print(f"Translation failed for segment: {segment['text']}. Error: {e}")
+
+            translated_output_path = os.path.join(out_path, f"{time.time()}_{base_name}_{to_language}.{output_format}")
+            translated_content = self._generate_output(translated_result, output_format, max_line_width)
+            with open(translated_output_path, 'w', encoding="utf-8") as f:
+                f.write(translated_content)
+
+        # Cleanup
+        import gc; gc.collect(); torch.cuda.empty_cache()
+        
+        return (original_output_path, translated_output_path)
 
 class LoadAudioPath:
     @classmethod
     def INPUT_TYPES(s):
         files = [f for f in os.listdir(input_path) if os.path.isfile(os.path.join(input_path, f)) and f.split('.')[-1] in ["wav", "mp3","WAV","flac","m4a", "mp4"]]
         return {"required":
-                    {"audio": (sorted(files),)},
+                    {"audio": (sorted(files),)}
                 }
 
     CATEGORY = "AIFSH_WhisperX"
@@ -191,6 +200,22 @@ class PathToAudioPath:
 
     CATEGORY = "AIFSH_WhisperX"
     RETURN_TYPES = ("AUDIOPATH",)
+    FUNCTION = "convert_path"
+
+    def convert_path(self, path):
+        return (path,)
+
+class PathToSRT:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "path": ("STRING", {"default": ""}),
+            }
+        }
+
+    CATEGORY = "AIFSH_WhisperX"
+    RETURN_TYPES = ("SRT",)
     FUNCTION = "convert_path"
 
     def convert_path(self, path):
