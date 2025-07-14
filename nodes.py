@@ -157,7 +157,8 @@ class WhisperX:
             result = whisperx.assign_word_speakers(diarize_segments, result)
 
         # 4. Write original transcript
-        original_output_path = os.path.join(out_path, f"{time.time()}_{base_name}.{output_format}")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        original_output_path = os.path.join(out_path, f"{timestamp}_{base_name}.{output_format}")
         original_content = self._generate_output(result, output_format, max_line_width)
         with open(original_output_path, 'w', encoding="utf-8") as f:
             f.write(original_content)
@@ -173,7 +174,7 @@ class WhisperX:
                 except Exception as e:
                     print(f"Translation failed for segment: {segment['text']}. Error: {e}")
 
-            translated_output_path = os.path.join(out_path, f"{time.time()}_{base_name}_{to_language}.{output_format}")
+            translated_output_path = os.path.join(out_path, f"{timestamp}_{base_name}_{to_language}.{output_format}")
             translated_content = self._generate_output(translated_result, output_format, max_line_width)
             with open(translated_output_path, 'w', encoding="utf-8") as f:
                 f.write(translated_content)
